@@ -53,10 +53,18 @@ python-Levenshtein==0.23.0
 
 -----
 
-## ⚙️ First-Time Setup
+## 🔑 TMDb API Integration
 
-1. **Directory:** Select your media folder, choose your preferred theme, and you're ready to organize\!
+### 🛠️ Setup Instructions
+1.  **Get a Key:** Sign up for a free account at [TheMovieDB.org](https://www.themoviedb.org/) and generate a **v3 API key** in your account settings.
+2.  **Add to Program:**
+    * Launch the application.
+    * Navigate to **File > Settings**.
+    * Paste your key into the **TMDb API Key** field.
+    * Click **Save Settings**.
+3.  **Security:** Your key is stored locally in an auto-generated `config.json` file. It is never shared, uploaded, or hardcoded into the source.
 
+> **Note:** The "Search TMDb" and "Preview" features will return errors until a valid API key is saved in the Settings menu.
 -----
 
 ## 🛠 Project Structure
