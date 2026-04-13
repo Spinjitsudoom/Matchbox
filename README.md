@@ -55,9 +55,7 @@ python-Levenshtein==0.23.0
 
 ## ⚙️ First-Time Setup
 
-1.  **TMDb API Key:** Obtain a free API key from [[TheMovieDB.org](https://www.google.com/search?q=https://www.themoviedb.org/settings/api)](https://www.google.com/search?q=https://www.themoviedb.org/settings/api).
-2.  **Settings:** Open the app, click the **Settings** icon, and paste your API key.
-3.  **Directory:** Select your media folder, choose your preferred theme, and you're ready to organize\!
+1. **Directory:** Select your media folder, choose your preferred theme, and you're ready to organize\!
 
 -----
 
@@ -68,8 +66,4 @@ python-Levenshtein==0.23.0
   * `themes.py`: The styling engine for recursive UI painting.
   * `settings_manager.py`: Handles configuration persistence and the settings window.
 
-<!-- end list -->
-
-```
-
----
+<!-- end list -->  
