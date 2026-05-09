@@ -10,6 +10,8 @@ for pkg in ('faster_whisper', 'ctranslate2', 'uvicorn', 'fastapi', 'anyio', 'sta
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 
 hiddenimports += [
+    'api',
+    'tmdb_engine',
     'faster_whisper.assets',
     'ctranslate2.converters.eole_ct2',
     'uvicorn.__main__',
