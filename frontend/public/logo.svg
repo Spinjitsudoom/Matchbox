@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#141d2e"/>
+      <stop offset="100%" stop-color="#080c16"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="246" y1="182" x2="390" y2="330" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+    <linearGradient id="stripGrad" x1="0" y1="0" x2="88" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1c2d4a"/>
+      <stop offset="100%" stop-color="#111e38"/>
+    </linearGradient>
+    <radialGradient id="glowGrad" cx="308" cy="256" r="145" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="playGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="14" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="appShape">
+      <rect width="512" height="512" rx="96"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect width="512" height="512" rx="96" fill="url(#bgGrad)"/>
+
+  <!-- Film strip column (clipped to app shape) -->
+  <g clip-path="url(#appShape)">
+    <rect x="0" y="0" width="88" height="512" fill="url(#stripGrad)"/>
+    <!-- Sprocket holes — evenly spaced (56px gap, 58px hole, 56px gap repeating) -->
+    <rect x="18" y="56"  width="52" height="58" rx="10" fill="#080c16"/>
+    <rect x="18" y="170" width="52" height="58" rx="10" fill="#080c16"/>
+    <rect x="18" y="284" width="52" height="58" rx="10" fill="#080c16"/>
+    <rect x="18" y="398" width="52" height="58" rx="10" fill="#080c16"/>
+    <!-- Right-edge shadow to separate strip from main area -->
+    <rect x="80" y="0" width="8" height="512" fill="#000" opacity="0.22"/>
+  </g>
+
+  <!-- Radial glow behind play button -->
+  <circle cx="308" cy="256" r="145" fill="url(#glowGrad)" clip-path="url(#appShape)"/>
+
+  <!-- Play button disk -->
+  <circle cx="308" cy="256" r="120" fill="#0c1422"/>
+  <!-- Accent ring -->
+  <circle cx="308" cy="256" r="117" fill="none" stroke="url(#accentGrad)" stroke-width="3" opacity="0.55"/>
+
+  <!-- Play triangle (vertices verified inside radius 117) -->
+  <polygon points="248,182 248,330 390,256" fill="url(#accentGrad)" filter="url(#playGlow)"/>
+</svg>

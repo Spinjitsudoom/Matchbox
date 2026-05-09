@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# PyInstaller output
+dist/
+build/
+.tmp/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Electron build output
+/tmp/electron-output/
+
+# App runtime files — contain personal data / API keys
+config.json
+.rename_history.json
+
+# Build artefacts
+complete builds/
+archive/
+
+# Backup folders
+Wednesday backup/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.swp

@@ -1,0 +1,75 @@
+{
+  "name": "media-manager",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "app": "npm run build && ./node_modules/.bin/electron .",
+    "dist": "npm run build && electron-builder"
+  },
+  "build": {
+    "appId": "com.mediamanager.tmdb",
+    "productName": "Media Manager",
+    "directories": {
+      "output": "/tmp/electron-output"
+    },
+    "files": ["electron/**", "dist/**", "public/icon.png"],
+    "extraResources": [
+      {
+        "from": "../dist/backend/backend_main",
+        "to": "backend",
+        "filter": ["**/*"]
+      }
+    ],
+    "icon": "public/icon.png",
+    "linux": {
+      "target": ["AppImage", "flatpak"],
+      "category": "Utility"
+    },
+    "flatpak": {
+      "branch": "stable",
+      "runtimeVersion": "24.08",
+      "finishArgs": [
+        "--share=ipc",
+        "--share=network",
+        "--socket=x11",
+        "--socket=wayland",
+        "--socket=pulseaudio",
+        "--filesystem=home",
+        "--device=dri"
+      ]
+    },
+    "win": { "target": "nsis" }
+  },
+  "dependencies": {
+    "axios": "^1.16.0",
+    "lucide-react": "^1.14.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-hot-toast": "^2.6.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.12.2",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.5.0",
+    "electron": "^42.0.0",
+    "electron-builder": "^26.8.1",
+    "eslint": "^10.2.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.5.0",
+    "postcss": "^8.5.14",
+    "tailwindcss": "^3.4.19",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.58.2",
+    "vite": "^8.0.10"
+  }
+}

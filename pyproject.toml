@@ -1,0 +1,19 @@
+[project]
+name = "media-manager-tmdb"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.136.1",
+    "faster-whisper>=1.1.1",
+    "python-levenshtein>=0.27.3",
+    "thefuzz>=0.22.1",
+    "tmdbv3api>=1.9.0",
+    "uvicorn[standard]>=0.46.0",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.20.0",
+]
