@@ -28,12 +28,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Use a writable user data dir when running as a PyInstaller binary
 def _data_dir() -> Path:
-    if getattr(sys, 'frozen', False):
-        d = Path.home() / "Documents" / "Media Manager"
-    else:
-        d = Path(__file__).parent
+    d = Path.home() / "Documents" / "Media Manager"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
