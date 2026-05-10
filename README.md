@@ -1,6 +1,6 @@
-# TMDB Media Manager
+# Matchbox
 
-A desktop media manager for renaming, organising, and generating subtitles for your TV show and movie library — powered by TMDB metadata and faster-whisper.
+A desktop app for renaming, organising, and generating subtitles for your TV show and movie library — powered by TMDB metadata and faster-whisper.
 
 ![Platform](https://img.shields.io/badge/platform-Linux-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -24,12 +24,13 @@ A desktop media manager for renaming, organising, and generating subtitles for y
 
 ## Download
 
-Head to the [Releases](https://github.com/Spinjitsudoom/TMDB-Media-Manager/releases) page for the latest builds:
+Head to the [Releases](https://github.com/Spinjitsudoom/Matchbox/releases) page for the latest builds:
 
 | Platform | File |
 |---|---|
-| Linux | `Media.Manager-x.x.x.AppImage` |
-| Windows | `Media.Manager-Setup-x.x.x.exe` |
+| Linux (AppImage) | `Matchbox-x.x.x.AppImage` |
+| Linux (Flatpak) | `Matchbox-x.x.x-x86_64.flatpak` |
+| Windows | `Matchbox-Setup-x.x.x.exe` |
 
 ---
 
@@ -54,7 +55,7 @@ Set the root folder of your media library in **Settings**. The app expects the f
       episode files...
     Season 02/
   Another Show/
-  Movie Name/
+  Movie Name (2024)/
 ```
 
 ### 3. Subtitle Generation (optional)
@@ -67,10 +68,10 @@ FFmpeg is required for the Remux feature — install it via your package manager
 
 ## Config & Data
 
-When running as a packaged app, all user data is stored in:
+All user data is stored in:
 
 ```
-~/Documents/Media Manager/
+~/Documents/Matchbox/
   config.json          # API key, library path, preferences
   .rename_history.json # Undo history
   backend.log          # Backend process log
@@ -86,7 +87,15 @@ When running as a packaged app, all user data is stored in:
 - Node.js 18+
 - `flatpak-builder` (for Flatpak target)
 
-### Build
+### Run in dev mode
+
+```bash
+./run.sh
+```
+
+Starts the backend and launches Electron. Kills the backend cleanly on exit.
+
+### Build distributable
 
 ```bash
 # Install Python dependencies
