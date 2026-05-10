@@ -40,9 +40,7 @@ jobs:
 
       - name: Package Windows installer
         working-directory: frontend
-        run: ./node_modules/.bin/electron-builder --win --config.directories.output=..\dist-win
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./node_modules/.bin/electron-builder --win --publish never --config.directories.output=..\dist-win
 
       - name: Upload installer to release
         uses: softprops/action-gh-release@v2

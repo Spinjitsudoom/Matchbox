@@ -2,6 +2,7 @@
   "name": "matchbox",
   "private": true,
   "version": "1.0.0",
+  "repository": "https://github.com/Spinjitsudoom/Matchbox",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
