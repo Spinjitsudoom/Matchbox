@@ -1,5 +1,5 @@
 {
-  "name": "media-manager",
+  "name": "matchbox",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -13,8 +13,8 @@
     "dist": "npm run build && electron-builder"
   },
   "build": {
-    "appId": "com.mediamanager.tmdb",
-    "productName": "Media Manager",
+    "appId": "com.matchbox.app",
+    "productName": "Matchbox",
     "directories": {
       "output": "/tmp/electron-output"
     },

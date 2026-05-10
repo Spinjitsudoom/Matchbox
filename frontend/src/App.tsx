@@ -152,7 +152,7 @@ export default function App() {
         {/* Titlebar */}
         <header className="flex items-center gap-3 px-4 py-2 border-b bg-surface-800 shrink-0" style={{ borderColor: 'var(--border)' }}>
           <Tv size={16} className="text-brand-400 shrink-0" />
-          <span className="text-sm font-semibold tracking-wide" style={{ color: 'var(--text-primary)' }}>Media Manager</span>
+          <span className="text-sm font-semibold tracking-wide" style={{ color: 'var(--text-primary)' }}>Matchbox</span>
 
           {/* TV / Movie toggle */}
           <div className="flex items-center gap-0.5 rounded-lg p-0.5 ml-4" style={{ background: 'var(--bg-700)' }}>

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Media Manager TMDB — full distribution build
+# Matchbox — full distribution build
 # Outputs: AppImage + Flatpak (Windows is built via GitHub Actions)
 set -e
 

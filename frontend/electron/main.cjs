@@ -12,15 +12,15 @@ let mainWindow = null;
 let logStream = null;
 
 function getLogPath() {
-  return path.join(os.homedir(), 'Documents', 'Media Manager', 'backend.log');
+  return path.join(os.homedir(), 'Documents', 'Matchbox', 'backend.log');
 }
 
 function openLog() {
   try {
-    const logDir = path.join(os.homedir(), 'Documents', 'Media Manager');
+    const logDir = path.join(os.homedir(), 'Documents', 'Matchbox');
     fs.mkdirSync(logDir, { recursive: true });
     logStream = fs.createWriteStream(getLogPath(), { flags: 'a' });
-    logStream.write(`\n--- Media Manager started ${new Date().toISOString()} ---\n`);
+    logStream.write(`\n--- Matchbox started ${new Date().toISOString()} ---\n`);
   } catch {}
 }
 
@@ -85,7 +85,7 @@ function createWindow() {
     height: 860,
     minWidth: 960,
     minHeight: 600,
-    title: 'Media Manager',
+    title: 'Matchbox',
     icon: path.join(__dirname, '..', 'public', 'icon.png'),
     backgroundColor: '#0d0f14',
     webPreferences: {

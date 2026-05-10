@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start Media Manager in dev mode (backend + Electron)
+# Start Matchbox in dev mode (backend + Electron)
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

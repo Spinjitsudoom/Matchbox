@@ -1,4 +1,4 @@
-"""Entry point for the packaged Media Manager backend."""
+"""Entry point for the packaged Matchbox backend."""
 import os
 import sys
 
@@ -13,7 +13,7 @@ if getattr(sys, 'frozen', False):
 import logging
 from pathlib import Path
 
-log_dir = Path.home() / "Documents" / "Media Manager"
+log_dir = Path.home() / "Documents" / "Matchbox"
 log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / "backend.log"
 

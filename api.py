@@ -1,4 +1,4 @@
-"""FastAPI backend for Media Manager TMDB."""
+"""FastAPI backend for Matchbox."""
 from __future__ import annotations
 import json
 import os
@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from tmdb_engine import TMDBEngine
 
-app = FastAPI(title="Media Manager TMDB")
+app = FastAPI(title="Matchbox")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,7 +29,7 @@ app.add_middleware(
 )
 
 def _data_dir() -> Path:
-    d = Path.home() / "Documents" / "Media Manager"
+    d = Path.home() / "Documents" / "Matchbox"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -195,7 +195,7 @@ def get_season(show_id: int, season_num: int):
 def proxy_image(path: str = Query(...), size: str = Query("w342")):
     url = f"{TMDB_IMG_BASE}/{size}{path}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "MediaManager/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Matchbox/1.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = resp.read()
             ct = resp.headers.get("Content-Type", "image/jpeg")
