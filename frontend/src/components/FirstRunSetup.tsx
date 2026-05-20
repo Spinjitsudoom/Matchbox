@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, FolderOpen, Loader2, Settings2, XCircle } from 'lucide-react';
+import { Download, FolderOpen, Loader2, Settings2, XCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { checkFFmpeg, saveConfig } from '../api/client';
+
+const BASE_URL = 'http://127.0.0.1:8765';
 
 interface Props {
   initialApiKey: string;
@@ -20,6 +22,7 @@ export function FirstRunSetup({ initialApiKey, initialTvPath, initialMoviePath, 
   const [moviePath, setMoviePath] = useState(initialMoviePath === '/' ? '' : initialMoviePath);
   const [pattern, setPattern] = useState(initialPattern || ' - ');
   const [ffmpegStatus, setFfmpegStatus] = useState<FFmpegStatus>('checking');
+  const [ffmpegInstallProgress, setFfmpegInstallProgress] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -27,6 +30,43 @@ export function FirstRunSetup({ initialApiKey, initialTvPath, initialMoviePath, 
       .then(result => setFfmpegStatus(result.available ? 'available' : 'missing'))
       .catch(() => setFfmpegStatus('missing'));
   }, []);
+
+  const installFFmpeg = async () => {
+    setFfmpegInstallProgress(0);
+    try {
+      const resp = await fetch(`${BASE_URL}/api/ffmpeg/install`);
+      if (!resp.ok) throw new Error('Request failed');
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.status === 'error') throw new Error(ev.error || 'Install failed');
+            if (ev.progress != null) setFfmpegInstallProgress(ev.progress);
+            if (ev.status === 'done') {
+              setFfmpegStatus('available');
+              toast.success('FFmpeg installed');
+            }
+          } catch (e: any) {
+            if (e?.message) { toast.error(e.message); setFfmpegStatus('missing'); }
+          }
+        }
+      }
+    } catch {
+      toast.error('FFmpeg download failed');
+      setFfmpegStatus('missing');
+    } finally {
+      setFfmpegInstallProgress(null);
+    }
+  };
 
   const save = async () => {
     if (!apiKey.trim()) {
@@ -141,14 +181,38 @@ export function FirstRunSetup({ initialApiKey, initialTvPath, initialMoviePath, 
             />
           </div>
 
-          <div className="rounded-lg border px-3 py-2 flex items-center gap-2" style={{ borderColor: 'var(--bg-400)', background: 'var(--bg-700)' }}>
-            {ffmpegStatus === 'checking' && <Loader2 size={16} className="animate-spin" style={{ color: 'var(--text-muted)' }} />}
-            {ffmpegStatus === 'available' && <CheckCircle2 size={16} className="text-green-400" />}
-            {ffmpegStatus === 'missing' && <XCircle size={16} className="text-amber-400" />}
-            <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-              FFmpeg {ffmpegStatus === 'checking' ? 'check in progress' : ffmpegStatus === 'available' ? 'is available' : 'was not found'}
-            </span>
-          </div>
+          {ffmpegStatus !== 'available' && (
+            <div className="rounded-lg border px-3 py-2.5 flex flex-col gap-2" style={{ borderColor: 'var(--bg-400)', background: 'var(--bg-700)' }}>
+              <div className="flex items-center gap-2">
+                {ffmpegStatus === 'checking' && <Loader2 size={16} className="animate-spin" style={{ color: 'var(--text-muted)' }} />}
+                {ffmpegStatus === 'missing' && ffmpegInstallProgress === null && <XCircle size={16} className="text-amber-400" />}
+                {ffmpegStatus === 'missing' && ffmpegInstallProgress !== null && <Loader2 size={16} className="animate-spin" style={{ color: 'var(--text-muted)' }} />}
+                <span className="text-sm flex-1" style={{ color: 'var(--text-secondary)' }}>
+                  {ffmpegStatus === 'checking' && 'Checking for FFmpeg…'}
+                  {ffmpegStatus === 'missing' && ffmpegInstallProgress === null && 'FFmpeg not found — required for splitting & remuxing'}
+                  {ffmpegStatus === 'missing' && ffmpegInstallProgress !== null && `Installing FFmpeg… ${ffmpegInstallProgress}%`}
+                </span>
+                {ffmpegStatus === 'missing' && ffmpegInstallProgress === null && (
+                  <button
+                    onClick={installFFmpeg}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors"
+                    style={{ background: 'var(--accent-600)', color: '#fff' }}
+                  >
+                    <Download size={12} />
+                    Download & Install
+                  </button>
+                )}
+              </div>
+              {ffmpegStatus === 'missing' && ffmpegInstallProgress !== null && (
+                <div className="w-full rounded-full h-1.5 overflow-hidden" style={{ background: 'var(--bg-500)' }}>
+                  <div
+                    className="h-full rounded-full transition-all duration-300"
+                    style={{ width: `${ffmpegInstallProgress}%`, background: 'var(--accent-500)' }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: 'var(--border)' }}>

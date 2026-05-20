@@ -445,7 +445,7 @@ export function RemuxModal({ folderPath, onClose }: Props) {
       </div>
     </div>
     {showSplit && singleSelected && (
-      <SplitModal folderPath={folderPath} filename={singleSelected} onClose={() => setShowSplit(false)} />
+      <SplitModal folderPath={folderPath} files={files} initialFile={singleSelected} onClose={() => setShowSplit(false)} />
     )}
     </>
   );

@@ -66,10 +66,9 @@ export default function App() {
       if (!c.api_key?.trim() || !hasPath) setShowFirstRun(true);
     }).catch(() => {});
     checkUpdates().then(u => {
-      const current = '1.0.1-test.15';
       // Only show update badge on stable builds, not test/dev builds
-      if (u.latest_tag && u.url && !current.includes('test') && !current.includes('dev')) {
-        if (u.latest_tag !== current && u.latest_tag !== `v${current}`) {
+      if (u.latest_tag && u.url && !__APP_VERSION__.includes('test') && !__APP_VERSION__.includes('dev')) {
+        if (u.latest_tag !== __APP_VERSION__ && u.latest_tag !== `v${__APP_VERSION__}`) {
           setUpdateAvailable({ tag: u.latest_tag, url: u.url });
         }
       }
@@ -190,6 +189,7 @@ export default function App() {
         <header className="flex items-center gap-3 px-4 py-2 border-b bg-surface-800 shrink-0" style={{ borderColor: 'var(--border)' }}>
           <Tv size={16} className="text-brand-400 shrink-0" />
           <span className="text-sm font-semibold tracking-wide" style={{ color: 'var(--text-primary)' }}>Matchbox</span>
+          <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>v{__APP_VERSION__}</span>
 
           {/* TV / Movie toggle */}
           <div className="flex items-center gap-0.5 rounded-lg p-0.5 ml-4" style={{ background: 'var(--bg-700)' }}>

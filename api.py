@@ -3,17 +3,19 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import urllib.request
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
 from thefuzz import process, fuzz
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +39,71 @@ def _data_dir() -> Path:
 
 _DATA_DIR = _data_dir()
 _CONFIG_FILE = _DATA_DIR / "config.json"
+
+
+def _ffmpeg_exe() -> str:
+    local = _DATA_DIR / "bin" / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
+    return str(local) if local.exists() else "ffmpeg"
+
+def _ffprobe_exe() -> str:
+    local = _DATA_DIR / "bin" / ("ffprobe.exe" if sys.platform == "win32" else "ffprobe")
+    return str(local) if local.exists() else "ffprobe"
+
+_SPLIT_BUFFER = 8.0  # seconds to search around each split point for keyframes
+
+
+def _probe_kf_after(src: Path, t: float) -> float:
+    """Return PTS of the first video keyframe at or after `t` seconds.
+
+    Uses frame-level probing (-show_frames, -skip_frame nonkey) for accurate
+    timestamps on B-frame content where packet PTS can differ from frame PTS.
+    """
+    r = subprocess.run(
+        [_ffprobe_exe(), "-v", "error", "-select_streams", "v:0",
+         "-skip_frame", "nonkey",
+         "-read_intervals", f"{max(0.0, t - 0.1):.6f}%+{_SPLIT_BUFFER + 2:.1f}",
+         "-show_frames",
+         "-show_entries", "frame=best_effort_timestamp_time,key_frame",
+         "-of", "csv=p=0", str(src)],
+        capture_output=True, text=True, timeout=30,
+    )
+    for line in r.stdout.splitlines():
+        p = line.strip().split(",")
+        if len(p) >= 2 and p[1].strip() == "1":
+            try:
+                pts = float(p[0])
+                if pts >= t - 0.02:
+                    return pts
+            except (ValueError, IndexError):
+                pass
+    return t
+
+
+def _probe_kf_before(src: Path, t: float) -> float:
+    """Return PTS of the last video keyframe at or before `t` seconds."""
+    ws = max(0.0, t - _SPLIT_BUFFER - 2)
+    r = subprocess.run(
+        [_ffprobe_exe(), "-v", "error", "-select_streams", "v:0",
+         "-skip_frame", "nonkey",
+         "-read_intervals", f"{ws:.6f}%+{t - ws + 1:.1f}",
+         "-show_frames",
+         "-show_entries", "frame=best_effort_timestamp_time,key_frame",
+         "-of", "csv=p=0", str(src)],
+        capture_output=True, text=True, timeout=30,
+    )
+    result = t  # fallback: treat cut point as already on a keyframe
+    for line in r.stdout.splitlines():
+        p = line.strip().split(",")
+        if len(p) >= 2 and p[1].strip() == "1":
+            try:
+                pts = float(p[0])
+                if pts <= t + 0.02:
+                    result = pts
+            except (ValueError, IndexError):
+                pass
+    return result
+
+
 _CONFIG_DEFAULTS: dict = {
     "api_key": "", "path": "/", "pattern": " - ", "theme": "Slate",
     "whisper_model": "base", "whisper_language": "", "whisper_beam_size": 5, "whisper_vad": True,
@@ -53,19 +120,26 @@ _CONFIG_DEFAULTS: dict = {
 
 
 class ConfigManager:
+    def __init__(self):
+        self._cache: Optional[dict] = None
+
     def load(self) -> dict:
+        if self._cache is not None:
+            return self._cache
         data = dict(_CONFIG_DEFAULTS)
         if _CONFIG_FILE.exists():
             try:
                 data.update(json.loads(_CONFIG_FILE.read_text()))
             except Exception:
                 pass
+        self._cache = data
         return data
 
     def save(self, updates: dict) -> dict:
         data = self.load()
         data.update(updates)
         _CONFIG_FILE.write_text(json.dumps(data, indent=2))
+        self._cache = data
         return data
 
 
@@ -229,15 +303,23 @@ def list_seasons(folder: str = Query(...)):
     p = Path(folder)
     if not p.exists() or not p.is_dir():
         raise HTTPException(400, "Invalid folder")
-    subs = [d for d in sorted(p.iterdir()) if d.is_dir()]
+    with os.scandir(str(p)) as it:
+        entries = sorted(it, key=lambda e: e.name)
     result = []
-    for d in subs:
-        files = [f for f in d.iterdir() if f.is_file() and f.suffix.lower() in VIDEO_EXTS]
-        result.append({"name": d.name, "path": str(d), "file_count": len(files)})
-    # also include files directly in the folder
-    direct = [f for f in p.iterdir() if f.is_file() and f.suffix.lower() in VIDEO_EXTS]
+    for e in entries:
+        if not e.is_dir(follow_symlinks=False):
+            continue
+        count = sum(
+            1 for f in os.scandir(e.path)
+            if f.is_file(follow_symlinks=False) and Path(f.name).suffix.lower() in VIDEO_EXTS
+        )
+        result.append({"name": e.name, "path": e.path, "file_count": count})
+    direct = sum(
+        1 for e in entries
+        if e.is_file(follow_symlinks=False) and Path(e.name).suffix.lower() in VIDEO_EXTS
+    )
     if direct:
-        result.insert(0, {"name": p.name, "path": str(p), "file_count": len(direct)})
+        result.insert(0, {"name": p.name, "path": str(p), "file_count": direct})
     return result
 
 
@@ -285,15 +367,20 @@ def get_season(show_id: int, season_num: int):
 
 # ── Image proxy ───────────────────────────────────────────────────────────────
 
+@lru_cache(maxsize=512)
+def _fetch_image(size: str, path: str) -> tuple[bytes, str]:
+    url = f"{TMDB_IMG_BASE}/{size}{path}"
+    req = urllib.request.Request(url, headers={"User-Agent": "Matchbox/1.0"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return resp.read(), resp.headers.get("Content-Type", "image/jpeg")
+
+
 @app.get("/api/image")
 def proxy_image(path: str = Query(...), size: str = Query("w342")):
-    url = f"{TMDB_IMG_BASE}/{size}{path}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Matchbox/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = resp.read()
-            ct = resp.headers.get("Content-Type", "image/jpeg")
-        return Response(content=data, media_type=ct)
+        data, ct = _fetch_image(size, path)
+        return Response(content=data, media_type=ct,
+                        headers={"Cache-Control": "public, max-age=86400"})
     except Exception:
         raise HTTPException(404, "Image not found")
 
@@ -580,10 +667,78 @@ class RemuxRequest(BaseModel):
 @app.get("/api/remux/check")
 def check_ffmpeg():
     try:
-        r = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+        r = subprocess.run([_ffmpeg_exe(), "-version"], capture_output=True, timeout=5)
         return {"available": r.returncode == 0}
     except Exception:
         return {"available": False}
+
+
+@app.get("/api/ffmpeg/install")
+def install_ffmpeg():
+    def generate():
+        import tarfile as _tarfile, zipfile as _zipfile
+        bin_dir = _DATA_DIR / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+
+        if sys.platform == "win32":
+            url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+            names = {"ffmpeg.exe", "ffprobe.exe"}
+        else:
+            url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+            names = {"ffmpeg", "ffprobe"}
+
+        tmp = Path(tempfile.mktemp(suffix=".tmp", dir=str(bin_dir)))
+        try:
+            yield f"data: {json.dumps({'status': 'downloading', 'progress': 0})}\n\n"
+            req = urllib.request.urlopen(url, timeout=120)
+            total = int(req.headers.get("Content-Length") or 0)
+            downloaded = 0
+            last_pct = -1
+            with open(tmp, "wb") as f:
+                while True:
+                    chunk = req.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        pct = min(79, int(downloaded / total * 80))
+                        if pct != last_pct:
+                            last_pct = pct
+                            yield f"data: {json.dumps({'status': 'downloading', 'progress': pct})}\n\n"
+
+            yield f"data: {json.dumps({'status': 'extracting', 'progress': 80})}\n\n"
+
+            if sys.platform == "win32":
+                with _zipfile.ZipFile(tmp) as z:
+                    for member in z.namelist():
+                        n = Path(member).name
+                        if n in names:
+                            with z.open(member) as src_f, open(bin_dir / n, "wb") as dst:
+                                dst.write(src_f.read())
+            else:
+                with _tarfile.open(tmp, "r:xz") as t:
+                    for member in t.getmembers():
+                        n = Path(member.name).name
+                        if n in names:
+                            f_obj = t.extractfile(member)
+                            if f_obj:
+                                out = bin_dir / n
+                                with open(out, "wb") as dst:
+                                    dst.write(f_obj.read())
+                                out.chmod(0o755)
+
+            yield f"data: {json.dumps({'status': 'done', 'progress': 100})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\n\n"
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+
+    return StreamingResponse(
+        generate(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 class AudioTracksRequest(BaseModel):
@@ -593,7 +748,7 @@ class AudioTracksRequest(BaseModel):
 
 def _probe_streams(path: Path, stream_type: str) -> list:
     p = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", stream_type,
+        [_ffprobe_exe(), "-v", "error", "-select_streams", stream_type,
          "-show_entries", "stream=index,codec_name:stream_tags=language,title",
          "-of", "json", str(path)],
         capture_output=True, text=True, timeout=15,
@@ -637,7 +792,7 @@ def get_audio_tracks(body: AudioTracksRequest):
 
 def _audio_track_count(path: Path) -> int:
     cmd = [
-        "ffprobe",
+        _ffprobe_exe(),
         "-v", "error",
         "-select_streams", "a",
         "-show_entries", "stream=index",
@@ -690,7 +845,7 @@ def start_remux(body: RemuxRequest):
 
             # Probe duration for progress calculation
             dur_probe = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                [_ffprobe_exe(), "-v", "error", "-show_entries", "format=duration",
                  "-of", "default=noprint_wrappers=1:nokey=1", str(src)],
                 capture_output=True, text=True, timeout=15,
             )
@@ -699,7 +854,7 @@ def start_remux(body: RemuxRequest):
             except (ValueError, AttributeError):
                 duration = 0.0
 
-            cmd = ["ffmpeg", "-y", "-v", "quiet", "-i", str(src)]
+            cmd = [_ffmpeg_exe(), "-y", "-v", "quiet", "-i", str(src)]
             if target_ext == "mkv" or default_audio_idx is not None or default_subtitle_idx is not None:
                 cmd.extend(["-map", "0", "-c", "copy"])
             else:
@@ -818,7 +973,7 @@ def generate_subtitles(body: WhisperRequest):
                     audio_idx = body.audio_track - 1
                     tmp_audio = Path(tempfile.mktemp(suffix=".wav", dir="/tmp"))
                     r = subprocess.run(
-                        ["ffmpeg", "-y", "-i", str(src),
+                        [_ffmpeg_exe(), "-y", "-i", str(src),
                          "-map", f"0:a:{audio_idx}",
                          "-ar", "16000", "-ac", "1", "-f", "wav", str(tmp_audio)],
                         capture_output=True, timeout=300,
@@ -921,7 +1076,7 @@ def validate_files(body: ValidateRequest):
             continue
         try:
             fmt_probe = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=format_name,duration,size",
+                [_ffprobe_exe(), "-v", "error", "-show_entries", "format=format_name,duration,size",
                  "-of", "json", str(src)],
                 capture_output=True, text=True, timeout=15,
             )
@@ -993,13 +1148,100 @@ def import_config(body: ConfigImportBody):
     return cfg.save(updates)
 
 
+# ── Video stream (for SplitModal player) ──────────────────────────────────────
+
+_VIDEO_MIME = {
+    '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/mp4',
+    '.webm': 'video/webm', '.mkv': 'video/x-matroska',
+    '.avi': 'video/x-msvideo', '.ts': 'video/mp2t', '.m2ts': 'video/mp2t',
+}
+
+@app.get("/api/probe/video")
+def probe_video(path: str):
+    """Return fps and duration for a video file via ffprobe."""
+    fp = Path(path)
+    if not fp.exists():
+        raise HTTPException(404, "File not found")
+    cmd = [_ffprobe_exe(), "-v", "quiet", "-print_format", "json",
+           "-show_streams", "-show_format", str(fp)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        data = json.loads(result.stdout)
+    except Exception:
+        return {"fps": 25.0, "duration": 0.0}
+    fps = 25.0
+    for stream in data.get("streams", []):
+        if stream.get("codec_type") == "video":
+            r = stream.get("r_frame_rate", "25/1")
+            try:
+                num, den = r.split("/")
+                fps = float(num) / float(den)
+            except Exception:
+                pass
+            break
+    try:
+        duration = float(data.get("format", {}).get("duration", 0))
+    except Exception:
+        duration = 0.0
+    return {"fps": round(fps, 3), "duration": duration}
+
+
+@app.get("/api/video")
+async def stream_video(path: str, request: Request):
+    fp = Path(path)
+    if not fp.exists() or not fp.is_file():
+        raise HTTPException(404, "File not found")
+    file_size = fp.stat().st_size
+    content_type = _VIDEO_MIME.get(fp.suffix.lower(), 'application/octet-stream')
+    CHUNK = 1 << 20  # 1 MB
+
+    range_header = request.headers.get("range", "")
+    m = re.match(r'bytes=(\d+)-(\d*)', range_header)
+    if m:
+        start = int(m.group(1))
+        end = int(m.group(2)) if m.group(2) else min(start + CHUNK - 1, file_size - 1)
+        end = min(end, file_size - 1)
+        length = end - start + 1
+
+        def _iter():
+            with open(fp, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    data = f.read(min(CHUNK, remaining))
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        return StreamingResponse(_iter(), status_code=206, media_type=content_type, headers={
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(length),
+            "Accept-Ranges": "bytes",
+        })
+
+    def _iter_full():
+        with open(fp, "rb") as f:
+            while True:
+                data = f.read(CHUNK)
+                if not data:
+                    break
+                yield data
+
+    return StreamingResponse(_iter_full(), media_type=content_type, headers={
+        "Content-Length": str(file_size),
+        "Accept-Ranges": "bytes",
+    })
+
+
 # ── Split File ─────────────────────────────────────────────────────────────────
 
 class SplitRequest(BaseModel):
     folder_path: str
     filename: str
-    splits: list[str]       # HH:MM:SS timestamps marking start of segments 2, 3, …
-    output_names: list[str]  # one name per segment (len = len(splits) + 1)
+    splits: list[str]       # HH:MM:SS.mmm timestamps marking start of segments 2, 3, …
+    output_names: list[str] # one name per segment (len = len(splits) + 1)
+    delete_original: bool = False
 
 
 @app.post("/api/split")
@@ -1011,26 +1253,229 @@ def split_file(body: SplitRequest):
     if not src.exists():
         raise HTTPException(400, "File not found")
 
+    def _hms_to_secs(hms: str) -> float:
+        parts = hms.split(':')
+        try:
+            return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+        except Exception:
+            return 0.0
+
     def generate():
-        total = len(body.output_names)
+        total_segs = len(body.output_names)
         starts = ["00:00:00"] + list(body.splits)
         ends: list[Optional[str]] = list(body.splits) + [None]
+        all_ok = True
+
+        # Detect source codec and total duration upfront (needed for all modes)
+        try:
+            v_streams = _probe_streams(src, "v")
+            src_codec = v_streams[0]["codec"] if v_streams else "h264"
+        except Exception:
+            src_codec = "h264"
+        enc_args = (
+            ["-c:v", "libx265", "-crf", "18", "-preset", "fast"]
+            if src_codec == "hevc"
+            else ["-c:v", "libx264", "-crf", "18", "-preset", "fast"]
+        )
+        dur_r = subprocess.run(
+            [_ffprobe_exe(), "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(src)],
+            capture_output=True, text=True, timeout=15,
+        )
+        try:
+            src_duration = float(dur_r.stdout.strip())
+        except (ValueError, AttributeError):
+            src_duration = 0.0
+
         for i, (start, end, out_name) in enumerate(zip(starts, ends, body.output_names)):
-            yield f"data: {json.dumps({'segment': i + 1, 'total': total, 'status': 'running', 'file': out_name})}\n\n"
-            cmd = ["ffmpeg", "-y", "-i", str(src), "-ss", start]
-            if end:
-                cmd += ["-to", end]
-            cmd += ["-c", "copy", str(base / out_name)]
+            yield f"data: {json.dumps({'segment': i+1, 'total': total_segs, 'status': 'running', 'file': out_name})}\n\n"
+            start_secs = _hms_to_secs(start)
+            end_secs   = _hms_to_secs(end) if end else src_duration
+            seg_dur    = max(0.0, end_secs - start_secs)
+            is_first   = start_secs < 0.01
+            is_last    = end is None
+
+            # Probe the nearest keyframes to each cut boundary
+            kf_start = 0.0 if is_first else _probe_kf_after(src, start_secs)
+            kf_end   = end_secs if is_last else _probe_kf_before(src, end_secs)
+
+            need_head   = not is_first and (kf_start - start_secs) > 0.02
+            need_tail   = not is_last  and (end_secs - kf_end)    > 0.02
+            need_middle = kf_start < kf_end - 0.02
+
+            ok = True
+            err_msg = ""
+            out_path = base / out_name
+
+            if not need_head and not need_tail:
+                # Both boundaries on (or within 0.02 s of) keyframes → stream copy.
+                # Seek to kf_start, not start_secs: input-side -ss on a non-keyframe
+                # timestamp snaps backward to the previous keyframe, adding unwanted
+                # footage. kf_start is itself a keyframe so the seek is exact.
+                seek_to = 0.0 if is_first else kf_start
+                cut_at  = src_duration if is_last else kf_end
+                cmd = [_ffmpeg_exe(), "-y"]
+                if seek_to > 0.01:
+                    cmd += ["-ss", f"{seek_to:.6f}"]
+                cmd += ["-i", str(src)]
+                if not is_last:
+                    cmd += ["-t", f"{cut_at - seek_to:.6f}"]
+                cmd += ["-c", "copy", str(out_path)]
+                try:
+                    r = subprocess.run(cmd, capture_output=True, timeout=3600)
+                    if r.returncode != 0:
+                        err_msg = r.stderr.decode(errors="replace")[-300:]
+                        ok = False
+                except Exception as e:
+                    ok = False; err_msg = str(e)
+
+            elif not need_middle:
+                # Segment too short for a split middle → full re-encode
+                cmd = [_ffmpeg_exe(), "-y"]
+                if start_secs > 0.01:
+                    cmd += ["-ss", f"{start_secs:.6f}"]
+                cmd += ["-i", str(src)]
+                if end:
+                    cmd += ["-t", f"{seg_dur:.6f}"]
+                cmd += enc_args + ["-c:a", "copy", "-progress", "pipe:1", str(out_path)]
+                try:
+                    with tempfile.TemporaryFile() as ef:
+                        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=ef)
+                        for raw in proc.stdout:  # type: ignore[union-attr]
+                            line = raw.decode(errors="replace").strip()
+                            if line.startswith("out_time_us=") and seg_dur > 0:
+                                try:
+                                    pct = min(99, int(int(line.split("=")[1]) / (seg_dur * 1_000_000) * 100))
+                                    yield f"data: {json.dumps({'segment': i+1, 'total': total_segs, 'status': 'running', 'progress': pct, 'file': out_name})}\n\n"
+                                except (ValueError, ZeroDivisionError):
+                                    pass
+                        try:
+                            proc.wait(timeout=3600)
+                        except subprocess.TimeoutExpired:
+                            proc.kill(); proc.wait()
+                        if proc.returncode != 0:
+                            ef.seek(0)
+                            err_msg = ef.read().decode(errors="replace")[-300:]
+                            ok = False
+                except Exception as e:
+                    ok = False; err_msg = str(e)
+
+            else:
+                # Smart split: re-encode only the non-keyframe-aligned boundary
+                # segments; stream-copy the keyframe-aligned middle bulk.
+                tmp_dir = Path(tempfile.mkdtemp())
+                try:
+                    parts: list[str] = []
+
+                    # A) Head: re-encode [start_secs → kf_start]
+                    if need_head:
+                        head_dur = kf_start - start_secs
+                        head_path = str(tmp_dir / "head.mkv")
+                        cmd = ([_ffmpeg_exe(), "-y", "-ss", f"{start_secs:.6f}",
+                                "-i", str(src), "-t", f"{head_dur:.6f}"]
+                               + enc_args + ["-c:a", "copy", "-progress", "pipe:1", head_path])
+                        with tempfile.TemporaryFile() as ef:
+                            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=ef)
+                            for raw in proc.stdout:  # type: ignore[union-attr]
+                                line = raw.decode(errors="replace").strip()
+                                if line.startswith("out_time_us=") and head_dur > 0:
+                                    try:
+                                        pct = min(19, int(int(line.split("=")[1]) / (head_dur * 1_000_000) * 20))
+                                        yield f"data: {json.dumps({'segment': i+1, 'total': total_segs, 'status': 'running', 'progress': pct, 'file': out_name})}\n\n"
+                                    except (ValueError, ZeroDivisionError):
+                                        pass
+                            try:
+                                proc.wait(timeout=3600)
+                            except subprocess.TimeoutExpired:
+                                proc.kill(); proc.wait()
+                            if proc.returncode != 0:
+                                ef.seek(0)
+                                err_msg = ef.read().decode(errors="replace")[-300:]
+                                ok = False
+                        if ok:
+                            parts.append(head_path)
+
+                    if ok:
+                        yield f"data: {json.dumps({'segment': i+1, 'total': total_segs, 'status': 'running', 'progress': 20, 'file': out_name})}\n\n"
+
+                    # B) Middle: stream copy [kf_start → kf_end]
+                    if ok:
+                        mid_dur  = kf_end - kf_start
+                        mid_path = str(tmp_dir / "middle.mkv")
+                        cmd = [_ffmpeg_exe(), "-y", "-ss", f"{kf_start:.6f}",
+                               "-i", str(src), "-t", f"{mid_dur:.6f}", "-c", "copy", mid_path]
+                        r = subprocess.run(cmd, capture_output=True, timeout=3600)
+                        if r.returncode != 0:
+                            err_msg = r.stderr.decode(errors="replace")[-300:]
+                            ok = False
+                        else:
+                            parts.append(mid_path)
+
+                    if ok:
+                        yield f"data: {json.dumps({'segment': i+1, 'total': total_segs, 'status': 'running', 'progress': 80, 'file': out_name})}\n\n"
+
+                    # C) Tail: re-encode [kf_end → end_secs]
+                    if ok and need_tail:
+                        tail_dur  = end_secs - kf_end
+                        tail_path = str(tmp_dir / "tail.mkv")
+                        cmd = ([_ffmpeg_exe(), "-y", "-ss", f"{kf_end:.6f}",
+                                "-i", str(src), "-t", f"{tail_dur:.6f}"]
+                               + enc_args + ["-c:a", "copy", "-progress", "pipe:1", tail_path])
+                        with tempfile.TemporaryFile() as ef:
+                            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=ef)
+                            for raw in proc.stdout:  # type: ignore[union-attr]
+                                line = raw.decode(errors="replace").strip()
+                                if line.startswith("out_time_us=") and tail_dur > 0:
+                                    try:
+                                        pct = 80 + min(19, int(int(line.split("=")[1]) / (tail_dur * 1_000_000) * 20))
+                                        yield f"data: {json.dumps({'segment': i+1, 'total': total_segs, 'status': 'running', 'progress': pct, 'file': out_name})}\n\n"
+                                    except (ValueError, ZeroDivisionError):
+                                        pass
+                            try:
+                                proc.wait(timeout=3600)
+                            except subprocess.TimeoutExpired:
+                                proc.kill(); proc.wait()
+                            if proc.returncode != 0:
+                                ef.seek(0)
+                                err_msg = ef.read().decode(errors="replace")[-300:]
+                                ok = False
+                        if ok:
+                            parts.append(tail_path)
+
+                    # D) Concat all parts into the final output file
+                    if ok:
+                        if len(parts) == 1:
+                            shutil.move(parts[0], str(out_path))
+                        else:
+                            concat_txt = str(tmp_dir / "concat.txt")
+                            with open(concat_txt, "w") as f:
+                                for p in parts:
+                                    f.write(f"file '{p}'\n")
+                            cmd = [_ffmpeg_exe(), "-y", "-f", "concat", "-safe", "0",
+                                   "-i", concat_txt, "-c", "copy", str(out_path)]
+                            r = subprocess.run(cmd, capture_output=True, timeout=3600)
+                            if r.returncode != 0:
+                                err_msg = r.stderr.decode(errors="replace")[-300:]
+                                ok = False
+
+                except Exception as e:
+                    ok = False; err_msg = str(e)
+                finally:
+                    shutil.rmtree(str(tmp_dir), ignore_errors=True)
+
+            if ok:
+                yield f"data: {json.dumps({'segment': i+1, 'total': total_segs, 'status': 'done', 'file': out_name})}\n\n"
+            else:
+                all_ok = False
+                yield f"data: {json.dumps({'segment': i+1, 'total': total_segs, 'status': 'error', 'file': out_name, 'error': err_msg})}\n\n"
+
+        if body.delete_original and all_ok:
             try:
-                result = subprocess.run(cmd, capture_output=True, timeout=3600)
-                if result.returncode == 0:
-                    yield f"data: {json.dumps({'segment': i + 1, 'total': total, 'status': 'done', 'file': out_name})}\n\n"
-                else:
-                    err = result.stderr.decode(errors="replace")[-300:]
-                    yield f"data: {json.dumps({'segment': i + 1, 'total': total, 'status': 'error', 'file': out_name, 'error': err})}\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'segment': i + 1, 'total': total, 'status': 'error', 'file': out_name, 'error': str(e)})}\n\n"
-        yield f"data: {json.dumps({'status': 'complete', 'total': total})}\n\n"
+                src.unlink()
+                yield f"data: {json.dumps({'status': 'deleted_original'})}\n\n"
+            except Exception:
+                pass
+        yield f"data: {json.dumps({'status': 'complete', 'total': total_segs})}\n\n"
 
     return StreamingResponse(
         generate(), media_type="text/event-stream",

@@ -12,9 +12,10 @@ class TMDBEngine:
         self.tv = TV()
         self.season = Season()
         self.movie = Movie()
-        # Simple in-memory caches — keyed by (show_id) or (show_id, season_num)
+        # Simple in-memory caches
         self._show_cache: dict = {}
         self._season_cache: dict = {}
+        self._movie_cache: dict = {}
 
     def search_shows(self, query):
         try:
@@ -110,9 +111,11 @@ class TMDBEngine:
             return []
 
     def get_movie_details(self, movie_id):
+        if movie_id in self._movie_cache:
+            return self._movie_cache[movie_id]
         try:
             d = self.movie.details(movie_id)
-            return {
+            result = {
                 "title": getattr(d, "title", ""),
                 "release_date": getattr(d, "release_date", ""),
                 "vote_average": getattr(d, "vote_average", None),
@@ -121,7 +124,9 @@ class TMDBEngine:
                 "overview": getattr(d, "overview", ""),
             }
         except Exception:
-            return {}
+            result = {}
+        self._movie_cache[movie_id] = result
+        return result
 
     def _sanitize_title(self, title):
         cleaned = "".join(c for c in title if c not in r'\/*?:"<>|').strip()

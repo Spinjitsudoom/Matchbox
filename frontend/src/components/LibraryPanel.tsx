@@ -17,9 +17,26 @@ export function LibraryPanel({ onSelectFolder, onShowExpanded, onSeasonFoldersLo
   const [seasons, setSeasons] = useState<Record<string, SeasonFolder[]>>({});
   const [loading, setLoading] = useState(false);
 
-  const refresh = (path: string) => {
+  const refresh = async (path: string, currentExpanded: string | null = null) => {
     setLoading(true);
-    getLibrary(path || undefined).then(setShows).catch(() => {}).finally(() => setLoading(false));
+    // Clear season cache so everything is re-fetched fresh
+    setSeasons({});
+    try {
+      const shows = await getLibrary(path || undefined);
+      setShows(shows);
+      // If a show was expanded, re-fetch its season folders
+      if (currentExpanded) {
+        const subs = await getSeasonFolders(currentExpanded).catch(() => []);
+        setSeasons({ [currentExpanded]: subs });
+        onSeasonFoldersLoaded(subs);
+      } else {
+        onSeasonFoldersLoaded([]);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -49,7 +66,7 @@ export function LibraryPanel({ onSelectFolder, onShowExpanded, onSeasonFoldersLo
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
         <span className="text-xs font-semibold tracking-widest uppercase" style={{ color: 'var(--text-muted)' }}>Library</span>
-        <button onClick={() => refresh(rootPath)} title="Refresh" style={{ color: 'var(--text-muted)' }} className="hover:opacity-80 transition-opacity">
+        <button onClick={() => refresh(rootPath, expanded)} title="Refresh" style={{ color: 'var(--text-muted)' }} className="hover:opacity-80 transition-opacity">
           <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
         </button>
       </div>

@@ -14,17 +14,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ── Python backend ──────────────────────────────────────────────────────
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
         with:
           python-version: '3.14'
 
       - name: Install Python dependencies
-        run: uv sync --group dev
+        run: uv sync
 
       - name: Build backend with PyInstaller
         run: uv run pyinstaller backend.spec --distpath dist/backend --workpath C:\Temp\pyinstaller-work --noconfirm
 
+      # ── Frontend ────────────────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -38,25 +40,98 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Package Windows installer
+      # ── Electron — unpack only (we handle packaging ourselves) ──────────────
+      - name: Package app (unpacked)
         working-directory: frontend
-        run: ./node_modules/.bin/electron-builder --win --publish never --config.directories.output=..\dist-win
+        run: >
+          ./node_modules/.bin/electron-builder
+          --win --target dir
+          --publish never
+          "--config.directories.output=..\dist-win"
 
+      # ── Icon conversion PNG → ICO ───────────────────────────────────────────
+      - name: Convert icon PNG to ICO
+        shell: pwsh
+        run: |
+          $src  = "frontend\public\icon.png"
+          $dest = "frontend\public\icon.ico"
+          # Use System.Drawing to generate a multi-size ICO
+          Add-Type -AssemblyName System.Drawing
+          $sizes = @(256, 128, 64, 48, 32, 16)
+          $ms = New-Object System.IO.MemoryStream
+          # ICO header: reserved(2) + type(2) + count(2)
+          $header = [byte[]](0,0, 1,0, $sizes.Count,0)
+          $ms.Write($header, 0, $header.Length)
+          $imageDataList = @()
+          $offset = 6 + $sizes.Count * 16
+          $src_img = [System.Drawing.Image]::FromFile((Resolve-Path $src))
+          foreach ($sz in $sizes) {
+            $bmp = New-Object System.Drawing.Bitmap($sz, $sz)
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.DrawImage($src_img, 0, 0, $sz, $sz)
+            $g.Dispose()
+            $ms2 = New-Object System.IO.MemoryStream
+            $bmp.Save($ms2, [System.Drawing.Imaging.ImageFormat]::Png)
+            $bmp.Dispose()
+            $imgData = $ms2.ToArray()
+            $ms2.Dispose()
+            $imageDataList += ,$imgData
+            # Directory entry: w, h, colors, reserved, planes, bitcount, size(4), offset(4)
+            $entry = [byte[]]($sz -band 0xFF, $sz -band 0xFF, 0, 0, 1,0, 32,0)
+            $entry += [System.BitConverter]::GetBytes([uint32]$imgData.Length)
+            $entry += [System.BitConverter]::GetBytes([uint32]$offset)
+            $ms.Write($entry, 0, $entry.Length)
+            $offset += $imgData.Length
+          }
+          $src_img.Dispose()
+          foreach ($imgData in $imageDataList) { $ms.Write($imgData, 0, $imgData.Length) }
+          [System.IO.File]::WriteAllBytes((Resolve-Path "frontend\public" | Join-Path -ChildPath "icon.ico"), $ms.ToArray())
+          $ms.Dispose()
+          Write-Host "icon.ico created"
+
+      # ── Read version from package.json ──────────────────────────────────────
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $v = (Get-Content frontend/package.json | ConvertFrom-Json).version
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $v"
+
+      # ── Inno Setup installer ────────────────────────────────────────────────
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          $ver  = "${{ steps.version.outputs.version }}"
+          & $iscc /DAppVersion=$ver installer\matchbox.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      # ── Portable zip ────────────────────────────────────────────────────────
+      - name: Build portable zip
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.version }}"
+          Compress-Archive -Path "dist-win\win-unpacked\*" `
+                           -DestinationPath "dist-win\Matchbox-$ver-portable-win.zip"
+
+      # ── Upload to GitHub Release ────────────────────────────────────────────
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            dist-win/*.exe
-            dist-win/*.zip
+            dist-win/Matchbox-Setup-*.exe
+            dist-win/Matchbox-*-portable-win.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload as artifact
+      # ── Always upload as artifact (workflow_dispatch & PRs) ─────────────────
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Matchbox-Windows
+          name: Matchbox-Windows-${{ steps.version.outputs.version }}
           path: |
-            dist-win/*.exe
-            dist-win/*.zip
+            dist-win/Matchbox-Setup-*.exe
+            dist-win/Matchbox-*-portable-win.zip
           retention-days: 14
