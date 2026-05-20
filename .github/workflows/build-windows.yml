@@ -45,7 +45,7 @@ jobs:
         working-directory: frontend
         run: >
           ./node_modules/.bin/electron-builder
-          --win --target dir
+          --win --dir
           --publish never
           "--config.directories.output=..\dist-win"
 
