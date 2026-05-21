@@ -33,3 +33,8 @@ Thumbs.db
 # Editor
 .vscode/
 *.swp
+
+# Chatlogs and personal notes
+chat-*.md
+TODO.md
+FUTURE_FEATURES.md
