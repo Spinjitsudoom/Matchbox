@@ -68,7 +68,7 @@ export const getMovie = (id: number) => api.get<MovieDetails>(`/movie/${id}`).th
 export const previewRename = (payload: {
   season_path: string; mode?: string;
   show_id?: number; season_num?: number; f_start?: number; f_offset?: number; pattern?: string;
-  movie_id?: number;
+  movie_id?: number; file_filter?: string;
 }) => api.post<{ episodes: EpisodeMatch[] }>('/preview', payload).then(r => r.data);
 
 export const doRename = (season_path: string, pairs: RenamePair[]) =>
@@ -151,3 +151,17 @@ export const checkUpdates = () =>
   api.get<{ latest_tag: string | null; url: string | null; name: string | null }>('/updates/check').then(r => r.data);
 export const importConfig = (data: Record<string, unknown>) =>
   api.post<Config>('/config/import', { data }).then(r => r.data);
+
+// Organizer
+export interface OrganizeMove {
+  source: string; dest: string; source_full: string; dest_full: string;
+  folder: string; changed: boolean;
+}
+export const organizeApply = (moves: OrganizeMove[]) =>
+  api.post<{ moved: number; errors: string[] }>('/organize/apply', { moves }).then(r => r.data);
+
+export interface OrganizeHistoryMove { source: string; dest: string }
+export const getOrganizeUndoPreview = () =>
+  api.get<{ moves: OrganizeHistoryMove[] }>('/organize/undo/preview').then(r => r.data);
+export const organizeUndo = () =>
+  api.post<{ restored: number; errors: string[] }>('/organize/undo').then(r => r.data);

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -188,7 +189,8 @@ def _save_presets(presets: list[dict]) -> None:
         pass
 
 
-MATCH_HISTORY_FILE = _DATA_DIR / "match_history.json"
+MATCH_HISTORY_FILE    = _DATA_DIR / "match_history.json"
+ORGANIZE_HISTORY_FILE = _DATA_DIR / "organize_history.json"
 
 
 def _load_match_history() -> dict:
@@ -345,7 +347,14 @@ def search_shows(q: str = Query(...)):
 
 @app.get("/api/search/movies")
 def search_movies(q: str = Query(...)):
-    return engine().search_movies(q)
+    # Strip leading numbered prefix ("01 - Title" → "Title") then trailing year
+    clean = re.sub(r'^\d+\s*[-–.]\s*', '', q).strip()
+    clean = re.sub(r'\s*[-–]?\s*\b(19|20)\d{2}\b\s*$', '', clean).strip() or clean
+    results = engine().search_movies(clean)
+    # Fallback to original query if cleaned version found nothing
+    if not results and clean != q:
+        results = engine().search_movies(q)
+    return results
 
 
 @app.get("/api/movie/{movie_id}")
@@ -398,6 +407,8 @@ class PreviewRequest(BaseModel):
     pattern: Optional[str] = None
     # Movie field
     movie_id: Optional[int] = None
+    # Optional: restrict processing to a single filename
+    file_filter: Optional[str] = None
 
 
 def _apply_template(tmpl: str, **fields) -> str:
@@ -456,6 +467,8 @@ def preview(body: PreviewRequest):
         f for f in os.listdir(body.season_path)
         if os.path.isfile(base / f) and Path(f).suffix.lower() in VIDEO_EXTS
     ])
+    if body.file_filter:
+        local_files = [f for f in local_files if f == body.file_filter]
 
     # ── Movie mode ────────────────────────────────────────────────────────────
     if body.mode == "movie":
@@ -651,6 +664,243 @@ def undo_rename():
             errors.append(f"{e}")
     _save_history(_rename_history)
     return {"restored": restored, "errors": errors}
+
+
+# ── Organizer ────────────────────────────────────────────────────────────────
+
+def _scan_video_files(root: Path) -> list[tuple[str, str, str]]:
+    """Recursively find all video files. Returns [(rel_folder, filename, full_path)]."""
+    results = []
+    for dirpath, dirs, files in os.walk(str(root)):
+        dirs.sort()
+        rel = str(Path(dirpath).relative_to(root))
+        rel = "" if rel == "." else rel
+        for f in sorted(files):
+            if Path(f).suffix.lower() in VIDEO_EXTS:
+                results.append((rel, f, os.path.join(dirpath, f)))
+    return results
+
+
+def _az_folder(filename: str) -> str:
+    stem = Path(filename).stem
+    # Strip leading numbered prefix: "01 - Title" → "Title"
+    stem = re.sub(r'^\d+\s*[-–.]\s*', '', stem).strip()
+    # Strip leading article for sort key: "The Dark Knight" → "D"
+    key = stem
+    for art in ("the ", "a ", "an "):
+        if stem.lower().startswith(art):
+            key = stem[len(art):]
+            break
+    ch = key.strip()[0].upper() if key.strip() else "#"
+    return ch if ch.isalpha() else "#"
+
+
+def _parse_title_year_org(filename: str) -> tuple[str, str]:
+    stem = Path(filename).stem
+    # Strip leading numbered prefix: "01 - Title" or "18 -Title" → "Title"
+    stem = re.sub(r'^\d+\s*[-–.]\s*', '', stem).strip()
+    m = re.match(r"^(.+?)\s*[-–]\s*(\d{4})\s*$", stem) or \
+        re.match(r"^(.+?)\s*\((\d{4})\)\s*$", stem)
+    if m:
+        return m.group(1).strip(), m.group(2)
+    return stem.strip(), ""
+
+
+def _clean_collection_name(name: str) -> str:
+    for suffix in (" Collection", " Series", " Franchise", " Films", " Trilogy", " Universe", " Saga"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)].strip()
+    return name.strip()
+
+
+def _tmdb_lookup(title: str, year: str, scheme: str, api_key: str) -> str:
+    """Look up genre or franchise folder for a movie. Thread-safe: each call owns its engine."""
+    from tmdb_engine import TMDBEngine
+    eng = TMDBEngine(api_key)
+    try:
+        # Search by title only; year used to pick the right result when there are duplicates
+        results = eng.search_movies(title)
+        if not results:
+            return "Other" if scheme == "genre" else ""
+        # Prefer result whose release year matches
+        match = next((r for r in results if r.get("year") == year), results[0])
+        d = eng.movie.details(match["id"])
+        if scheme == "genre":
+            genres = getattr(d, "genres", []) or []
+            return genres[0]["name"] if genres else "Other"
+        elif scheme == "studio":
+            companies = getattr(d, "production_companies", []) or []
+            if companies:
+                c = companies[0]
+                name = c.get("name", "") if hasattr(c, "get") else getattr(c, "name", "")
+                return name if name else "Other"
+            return "Other"
+        else:  # franchise
+            col = getattr(d, "belongs_to_collection", None)
+            if col:
+                name = col.get("name", "") if hasattr(col, "get") else getattr(col, "name", "")
+                return _clean_collection_name(name) if name else ""
+            return ""  # standalone — goes to root
+    except Exception:
+        return "Other" if scheme in ("genre", "studio") else ""
+
+
+def _organize_stream(movie_path: Path, scheme: str, api_key: str):
+    """Generator yielding NDJSON lines describing proposed moves."""
+    all_files = _scan_video_files(movie_path)
+    total = len(all_files)
+
+    def make_entry(rel_folder, filename, full_path, target_folder):
+        src = f"{rel_folder}/{filename}" if rel_folder else filename
+        dst = f"{target_folder}/{filename}" if target_folder else filename
+        return json.dumps({
+            "type": "move",
+            "source": src,
+            "dest": dst,
+            "source_full": full_path,
+            "dest_full": str(movie_path / dst),
+            "folder": target_folder,
+            "changed": src != dst,
+        })
+
+    if scheme in ("flat", "az", "year"):
+        for rel_folder, filename, full_path in all_files:
+            if scheme == "flat":
+                folder = ""
+            elif scheme == "az":
+                folder = _az_folder(filename)
+            else:  # year
+                m = re.search(r'\b((?:19|20)\d{2})\b', filename)
+                folder = m.group(1) if m else "Unknown"
+            yield make_entry(rel_folder, filename, full_path, folder) + "\n"
+        yield json.dumps({"type": "done", "total": total}) + "\n"
+        return
+
+    # Genre / Franchise / Studio — parallel TMDB lookups
+    yield json.dumps({"type": "progress", "done": 0, "total": total}) + "\n"
+
+    def lookup(item):
+        rel_folder, filename, full_path = item
+        title, year = _parse_title_year_org(filename)
+        folder = _tmdb_lookup(title, year, scheme, api_key)
+        return rel_folder, filename, full_path, folder
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(lookup, item): item for item in all_files}
+        for future in as_completed(futures):
+            rel_folder, filename, full_path, folder = future.result()
+            done += 1
+            yield make_entry(rel_folder, filename, full_path, folder) + "\n"
+            yield json.dumps({"type": "progress", "done": done, "total": total}) + "\n"
+
+    yield json.dumps({"type": "done", "total": total}) + "\n"
+
+
+class OrganizePreviewRequest(BaseModel):
+    movie_path: str
+    scheme: str  # "flat" | "az" | "year" | "genre" | "studio" | "franchise"
+
+
+class OrganizeMoveEntry(BaseModel):
+    source_full: str
+    dest_full: str
+    source: str
+    dest: str
+
+
+class OrganizeApplyRequest(BaseModel):
+    moves: list[OrganizeMoveEntry]
+
+
+@app.post("/api/organize/preview")
+def organize_preview(body: OrganizePreviewRequest):
+    api_key = cfg.load().get("api_key", "")
+    return StreamingResponse(
+        _organize_stream(Path(body.movie_path), body.scheme, api_key),
+        media_type="application/x-ndjson",
+    )
+
+
+@app.post("/api/organize/apply")
+def organize_apply(body: OrganizeApplyRequest):
+    moved, errors = [], []
+    history_entries: list[dict] = []
+    roots_to_clean: set[Path] = set()
+    for m in body.moves:
+        src, dst = Path(m.source_full), Path(m.dest_full)
+        if not src.exists():
+            errors.append(f"Not found: {m.source}")
+            continue
+        if dst.exists():
+            errors.append(f"Already exists, skipped: {m.dest}")
+            continue
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+            moved.append(m.source)
+            history_entries.append({"source": m.source_full, "dest": m.dest_full})
+            roots_to_clean.add(src.parent)
+        except Exception as e:
+            errors.append(f"{m.source}: {e}")
+    # Remove directories that are now empty (bottom-up)
+    for d in sorted(roots_to_clean, key=lambda p: len(p.parts), reverse=True):
+        try:
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        except Exception:
+            pass
+    # Save undo history
+    if history_entries:
+        try:
+            ORGANIZE_HISTORY_FILE.write_text(json.dumps(history_entries, indent=2))
+        except Exception:
+            pass
+    return {"moved": len(moved), "errors": errors}
+
+
+@app.get("/api/organize/undo/preview")
+def organize_undo_preview():
+    if not ORGANIZE_HISTORY_FILE.exists():
+        return {"moves": []}
+    try:
+        return {"moves": json.loads(ORGANIZE_HISTORY_FILE.read_text())}
+    except Exception:
+        return {"moves": []}
+
+
+@app.post("/api/organize/undo")
+def organize_undo():
+    if not ORGANIZE_HISTORY_FILE.exists():
+        return {"restored": 0, "errors": []}
+    try:
+        history = json.loads(ORGANIZE_HISTORY_FILE.read_text())
+    except Exception:
+        return {"restored": 0, "errors": ["Could not read organize history"]}
+    restored, errors = [], []
+    roots_to_clean: set[Path] = set()
+    for item in history:
+        src = Path(item["dest"])    # where it currently lives
+        dst = Path(item["source"])  # where it came from
+        if not src.exists():
+            errors.append(f"Not found: {src.name}")
+            continue
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+            restored.append(src.name)
+            roots_to_clean.add(src.parent)
+        except Exception as e:
+            errors.append(f"{src.name}: {e}")
+    # Clean up directories that are now empty
+    for d in sorted(roots_to_clean, key=lambda p: len(p.parts), reverse=True):
+        try:
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        except Exception:
+            pass
+    ORGANIZE_HISTORY_FILE.unlink(missing_ok=True)
+    return {"restored": len(restored), "errors": errors}
 
 
 # ── Remux ─────────────────────────────────────────────────────────────────────

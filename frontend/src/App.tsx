@@ -52,6 +52,7 @@ export default function App() {
   // Movie state
   const [movieId, setMovieId] = useState<number | null>(null);
   const [movieDetails, setMovieDetails] = useState<MovieDetails | null>(null);
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
 
   const suppressFolderLink = useRef(false);
   const suppressSeasonLink = useRef(false);
@@ -91,7 +92,7 @@ export default function App() {
     setShowId(null); setShowDetails(null); setSeasons([]);
     setSelectedSeason(null); setSeasonDetails(null);
     setMovieId(null); setMovieDetails(null);
-    setSelectedFolder(null); setAutoQuery(undefined);
+    setSelectedFolder(null); setSelectedFile(null); setAutoQuery(undefined);
   };
 
   // ── Folder → TMDB season (TV mode) ────────────────────────────────────────
@@ -127,6 +128,32 @@ export default function App() {
       }
     }
   }, [mediaType, seasons, selectedSeason]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── File click → TMDB auto-search (Movie mode) ───────────────────────────
+  const handleSelectFile = useCallback((filename: string, folderPath: string) => {
+    setSelectedFolder(folderPath);
+    setSelectedFile(filename);
+    // Clear current movie match immediately; restore below if a saved match exists
+    setMovieId(null); setMovieDetails(null);
+    // Clean filename for TMDB search
+    const cleaned = filename
+      .replace(/\.[^/.]+$/, '')           // remove extension
+      .replace(/^\d+\s*[-–.]\s*/, '')     // strip leading "01 - " prefix
+      .replace(/[._]/g, ' ')              // dots/underscores → spaces
+      .replace(/\b(1080p|720p|480p|2160p|x264|x265|HEVC|WEB[-\s]?DL|BluRay|HDR|DV|REMUX|NF|AMZN|IMAX)\b/gi, '')
+      .replace(/\s*[-–]?\s*\b(?:19|20)\d{2}\b\s*$/, '')  // strip trailing year
+      .replace(/\s+/g, ' ')
+      .trim();
+    setAutoQuery(cleaned);
+    // Restore any previously saved TMDB match for this file
+    const fileKey = folderPath + '/' + filename;
+    getMatchHistory(fileKey).then(h => {
+      if (!h?.id || h.type !== 'movie') return;
+      getMovie(h.id).then(details => {
+        setMovieId(h.id); setMovieDetails(details);
+      }).catch(() => {});
+    }).catch(() => {});
+  }, []);
 
   // ── TMDB season → folder (TV mode) ────────────────────────────────────────
   const handleSelectSeason = useCallback(async (num: number) => {
@@ -245,12 +272,12 @@ export default function App() {
           <aside className="w-52 shrink-0 border-r bg-surface-800 flex flex-col overflow-hidden" style={{ borderColor: 'var(--border)' }}>
             <LibraryPanel
               onSelectFolder={handleSelectFolder}
-              onShowExpanded={(name, path) => {
-                setAutoQuery(name);
-                if (mediaType === 'movie') handleSelectFolder(path);
-              }}
+              onSelectFile={handleSelectFile}
+              onShowExpanded={(name, _path) => { setAutoQuery(name); }}
               onSeasonFoldersLoaded={setSeasonFolders}
               selectedPath={selectedFolder}
+              selectedFile={selectedFile}
+              mediaType={mediaType}
               rootPath={config
                 ? (mediaType === 'tv'
                     ? (config.tv_path || config.path || '')
@@ -268,12 +295,14 @@ export default function App() {
               seasonDetails={seasonDetails}
               movieDetails={movieDetails}
               pattern={pattern}
+              selectedFile={mediaType === 'movie' ? selectedFile : null}
               onRenameSuccess={() => {
                 if (!selectedFolder) return;
                 if (mediaType === 'tv' && showId && showDetails) {
                   saveMatchHistory({ folder_path: selectedFolder, type: 'tv', id: showId, name: showDetails.name, season_num: selectedSeason ?? undefined }).catch(() => {});
                 } else if (mediaType === 'movie' && movieId && movieDetails) {
-                  saveMatchHistory({ folder_path: selectedFolder, type: 'movie', id: movieId, name: movieDetails.title }).catch(() => {});
+                  const fileKey = selectedFile ? selectedFolder + '/' + selectedFile : selectedFolder;
+                  saveMatchHistory({ folder_path: fileKey, type: 'movie', id: movieId, name: movieDetails.title }).catch(() => {});
                 }
               }}
             />

@@ -1,7 +1,7 @@
 {
   "name": "matchbox",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.0.1-test.11",
   "description": "Automated TV show and movie renaming for Plex, Jellyfin, and Emby",
   "author": {
     "name": "Etienne Axiak",
@@ -27,9 +27,8 @@
     "files": ["electron/**", "dist/**", "public/icon.png"],
     "extraResources": [
       {
-        "from": "../dist/backend/backend_main",
-        "to": "backend",
-        "filter": ["**/*"]
+        "from": "../dist/backend_main",
+        "to": "backend"
       }
     ],
     "icon": "public/icon.png",

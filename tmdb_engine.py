@@ -130,8 +130,10 @@ class TMDBEngine:
 
     def _sanitize_title(self, title):
         cleaned = "".join(c for c in title if c not in r'\/*?:"<>|').strip()
-        # Apply title case if any word starts lowercase (handles sentence-case and all-lowercase TMDB titles)
-        if cleaned and any(w and w[0].islower() for w in cleaned.split()):
+        # Apply title case only when ALL words are lowercase (e.g. TMDB sentence-case titles).
+        # Never apply when the title has mixed case — that would wrongly capitalise "of", "the", etc.
+        words = [w for w in cleaned.split() if w]
+        if words and all(w[0].islower() for w in words):
             cleaned = cleaned.title()
         return cleaned
 

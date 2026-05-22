@@ -19,6 +19,7 @@ interface Props {
   seasonDetails: SeasonDetails | null;
   movieDetails: MovieDetails | null;
   pattern: string;
+  selectedFile?: string | null;
   onRenameSuccess?: () => void;
 }
 
@@ -42,7 +43,7 @@ function scoreColor(score: number, hasFile: boolean): {
   };
 }
 
-export function RenamePanel({ showId, seasonNum, movieId, seasonPath, seasonDetails, movieDetails, pattern, onRenameSuccess }: Props) {
+export function RenamePanel({ showId, seasonNum, movieId, seasonPath, seasonDetails, movieDetails, pattern, selectedFile, onRenameSuccess }: Props) {
   const isMovie = movieId !== null;
   const [episodes, setEpisodes] = useState<EpisodeMatch[]>([]);
   const [mode, setMode] = useState<'numeric' | 'title'>('numeric');
@@ -66,7 +67,7 @@ export function RenamePanel({ showId, seasonNum, movieId, seasonPath, seasonDeta
     setLoadingPreview(true);
     try {
       const result = await previewRename(isMovie
-        ? { season_path: seasonPath, mode: 'movie', movie_id: movieId! }
+        ? { season_path: seasonPath, mode: 'movie', movie_id: movieId!, ...(selectedFile ? { file_filter: selectedFile } : {}) }
         : { season_path: seasonPath, mode, show_id: showId!, season_num: seasonNum!, f_offset: fOffset, pattern: customPattern }
       );
       setEpisodes(result.episodes);
@@ -75,7 +76,7 @@ export function RenamePanel({ showId, seasonNum, movieId, seasonPath, seasonDeta
     } finally {
       setLoadingPreview(false);
     }
-  }, [showId, seasonNum, movieId, seasonPath, mode, fOffset, customPattern]);
+  }, [showId, seasonNum, movieId, seasonPath, mode, fOffset, customPattern, selectedFile]);
 
   // Auto-trigger when the required combination of keys is present
   useEffect(() => {

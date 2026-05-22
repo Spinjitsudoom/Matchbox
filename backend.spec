@@ -5,7 +5,7 @@ datas = []
 binaries = []
 hiddenimports = []
 
-for pkg in ('faster_whisper', 'ctranslate2', 'uvicorn', 'fastapi', 'anyio', 'starlette'):
+for pkg in ('faster_whisper', 'ctranslate2', 'uvicorn', 'fastapi', 'anyio', 'starlette', 'pydantic', 'pydantic_core'):
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 
