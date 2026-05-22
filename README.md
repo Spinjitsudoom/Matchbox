@@ -221,3 +221,9 @@ The build is **unsigned**. See the Gatekeeper note in the Download section.
 ## License
 
 MIT — see [LICENSE](LICENSE)
+
+---
+
+## Platform Testing
+
+The Linux (AppImage, Flatpak) and Windows (installer, portable) builds have been tested and verified. The macOS build is produced by the same CI pipeline but has **not been tested** — use it at your own risk and please open an issue if you run into problems.
