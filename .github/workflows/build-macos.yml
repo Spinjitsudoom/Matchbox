@@ -1,0 +1,85 @@
+name: Build macOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    env:
+      # Prevent electron-builder from searching for a signing certificate
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Python backend ──────────────────────────────────────────────────────
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install Python dependencies
+        run: uv sync
+
+      - name: Build backend with PyInstaller
+        run: uv run pyinstaller backend.spec --workpath /tmp/pyinstaller-work --noconfirm
+
+      # ── Frontend ────────────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      # ── Read version from package.json ──────────────────────────────────────
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./frontend/package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      # ── Electron — package macOS DMG + zip ──────────────────────────────────
+      - name: Package app (macOS)
+        working-directory: frontend
+        run: >
+          ./node_modules/.bin/electron-builder
+          --mac
+          --publish never
+          "--config.directories.output=../dist-mac"
+
+      # ── Upload to GitHub Release ────────────────────────────────────────────
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            dist-mac/Matchbox-*.dmg
+            dist-mac/Matchbox-*-mac.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Always upload as artifact (workflow_dispatch & PRs) ─────────────────
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Matchbox-macOS-${{ steps.version.outputs.version }}
+          path: |
+            dist-mac/Matchbox-*.dmg
+            dist-mac/Matchbox-*-mac.zip
+          retention-days: 14

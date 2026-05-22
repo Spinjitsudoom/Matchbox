@@ -99,6 +99,10 @@ Head to the [Releases](https://github.com/Spinjitsudoom/Matchbox/releases) page 
 | Linux (Flatpak) | `Matchbox-x.x.x-x86_64.flatpak` | `flatpak install` |
 | Windows (Installer) | `Matchbox-Setup-x.x.x.exe` | Inno Setup, adds Start Menu entry |
 | Windows (Portable) | `Matchbox-x.x.x-portable-win.zip` | Extract and run, no install needed |
+| macOS (DMG) | `Matchbox-x.x.x.dmg` | Apple Silicon; unsigned — see note below |
+| macOS (Zip) | `Matchbox-x.x.x-arm64-mac.zip` | Extract `Matchbox.app` and run |
+
+> **macOS unsigned build:** The app is not notarised. On first launch macOS Gatekeeper will block it. To open it: right-click the app → **Open** → **Open**, or run `xattr -cr Matchbox.app` in a terminal before launching.
 
 ---
 
@@ -187,6 +191,17 @@ Windows builds run automatically via GitHub Actions on any `v*` tag push:
 3. Packages the Electron app (unpacked)
 4. Produces an Inno Setup installer (`Matchbox-Setup-x.x.x.exe`)
 5. Zips the unpacked app as a portable build (`Matchbox-x.x.x-portable-win.zip`)
+
+### macOS distributable
+
+macOS builds run automatically via GitHub Actions on any `v*` tag push (Apple Silicon / arm64):
+
+1. Builds the Python backend with PyInstaller
+2. Builds the React frontend with Vite
+3. Packages the Electron app as a DMG and zip
+4. Uploads to the GitHub Release
+
+The build is **unsigned**. See the Gatekeeper note in the Download section.
 
 ---
 
