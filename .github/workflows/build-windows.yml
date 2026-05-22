@@ -26,7 +26,7 @@ jobs:
         run: uv sync
 
       - name: Build backend with PyInstaller
-        run: uv run pyinstaller backend.spec --distpath dist/backend --workpath C:\Temp\pyinstaller-work --noconfirm
+        run: uv run pyinstaller backend.spec --workpath C:\Temp\pyinstaller-work --noconfirm
 
       # ── Frontend ────────────────────────────────────────────────────────────
       - name: Set up Node.js

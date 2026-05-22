@@ -7,8 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "==> [1/3] Building Python backend with PyInstaller..."
-uv run pyinstaller backend.spec --distpath dist/backend --workpath /tmp/pyinstaller-work --noconfirm
-echo "    Backend binary: dist/backend/backend_main/"
+uv run pyinstaller backend.spec --workpath /tmp/pyinstaller-work --noconfirm
+echo "    Backend binary: dist/backend_main/"
 
 echo ""
 echo "==> [2/3] Building frontend..."
