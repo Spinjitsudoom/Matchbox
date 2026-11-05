@@ -50,6 +50,21 @@ def _ffprobe_exe() -> str:
     local = _DATA_DIR / "bin" / ("ffprobe.exe" if sys.platform == "win32" else "ffprobe")
     return str(local) if local.exists() else "ffprobe"
 
+def _ff_env() -> dict:
+    # The frozen backend's LD_LIBRARY_PATH points at bundled libs (e.g. libmvec)
+    # that break system ffmpeg against an older glibc; restore the original.
+    env = dict(os.environ)
+    if getattr(sys, "frozen", False):
+        orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+        if orig is not None:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+def _ff_run(cmd, **kwargs):
+    return subprocess.run(cmd, env=_ff_env(), **kwargs)
+
 _SPLIT_BUFFER = 8.0  # seconds to search around each split point for keyframes
 
 
@@ -59,7 +74,7 @@ def _probe_kf_after(src: Path, t: float) -> float:
     Uses frame-level probing (-show_frames, -skip_frame nonkey) for accurate
     timestamps on B-frame content where packet PTS can differ from frame PTS.
     """
-    r = subprocess.run(
+    r = _ff_run(
         [_ffprobe_exe(), "-v", "error", "-select_streams", "v:0",
          "-skip_frame", "nonkey",
          "-read_intervals", f"{max(0.0, t - 0.1):.6f}%+{_SPLIT_BUFFER + 2:.1f}",
@@ -83,7 +98,7 @@ def _probe_kf_after(src: Path, t: float) -> float:
 def _probe_kf_before(src: Path, t: float) -> float:
     """Return PTS of the last video keyframe at or before `t` seconds."""
     ws = max(0.0, t - _SPLIT_BUFFER - 2)
-    r = subprocess.run(
+    r = _ff_run(
         [_ffprobe_exe(), "-v", "error", "-select_streams", "v:0",
          "-skip_frame", "nonkey",
          "-read_intervals", f"{ws:.6f}%+{t - ws + 1:.1f}",
@@ -917,7 +932,7 @@ class RemuxRequest(BaseModel):
 @app.get("/api/remux/check")
 def check_ffmpeg():
     try:
-        r = subprocess.run([_ffmpeg_exe(), "-version"], capture_output=True, timeout=5)
+        r = _ff_run([_ffmpeg_exe(), "-version"], capture_output=True, timeout=5)
         return {"available": r.returncode == 0}
     except Exception:
         return {"available": False}
@@ -997,7 +1012,7 @@ class AudioTracksRequest(BaseModel):
 
 
 def _probe_streams(path: Path, stream_type: str) -> list:
-    p = subprocess.run(
+    p = _ff_run(
         [_ffprobe_exe(), "-v", "error", "-select_streams", stream_type,
          "-show_entries", "stream=index,codec_name:stream_tags=language,title",
          "-of", "json", str(path)],
@@ -1050,7 +1065,7 @@ def _audio_track_count(path: Path) -> int:
         str(path),
     ]
     try:
-        probe = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        probe = _ff_run(cmd, capture_output=True, text=True, timeout=15)
         if probe.returncode != 0:
             return 0
         data = json.loads(probe.stdout or "{}")
@@ -1094,7 +1109,7 @@ def start_remux(body: RemuxRequest):
                 final_name = fname
 
             # Probe duration for progress calculation
-            dur_probe = subprocess.run(
+            dur_probe = _ff_run(
                 [_ffprobe_exe(), "-v", "error", "-show_entries", "format=duration",
                  "-of", "default=noprint_wrappers=1:nokey=1", str(src)],
                 capture_output=True, text=True, timeout=15,
@@ -1222,7 +1237,7 @@ def generate_subtitles(body: WhisperRequest):
                 if body.audio_track is not None:
                     audio_idx = body.audio_track - 1
                     tmp_audio = Path(tempfile.mktemp(suffix=".wav", dir="/tmp"))
-                    r = subprocess.run(
+                    r = _ff_run(
                         [_ffmpeg_exe(), "-y", "-i", str(src),
                          "-map", f"0:a:{audio_idx}",
                          "-ar", "16000", "-ac", "1", "-f", "wav", str(tmp_audio)],
@@ -1325,7 +1340,7 @@ def validate_files(body: ValidateRequest):
             results.append({"file": fname, "error": "not found"})
             continue
         try:
-            fmt_probe = subprocess.run(
+            fmt_probe = _ff_run(
                 [_ffprobe_exe(), "-v", "error", "-show_entries", "format=format_name,duration,size",
                  "-of", "json", str(src)],
                 capture_output=True, text=True, timeout=15,
@@ -1415,7 +1430,7 @@ def probe_video(path: str):
     cmd = [_ffprobe_exe(), "-v", "quiet", "-print_format", "json",
            "-show_streams", "-show_format", str(fp)]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = _ff_run(cmd, capture_output=True, text=True, timeout=30)
         data = json.loads(result.stdout)
     except Exception:
         return {"fps": 25.0, "duration": 0.0}
@@ -1527,7 +1542,7 @@ def split_file(body: SplitRequest):
             if src_codec == "hevc"
             else ["-c:v", "libx264", "-crf", "18", "-preset", "fast"]
         )
-        dur_r = subprocess.run(
+        dur_r = _ff_run(
             [_ffprobe_exe(), "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", str(src)],
             capture_output=True, text=True, timeout=15,
@@ -1572,7 +1587,7 @@ def split_file(body: SplitRequest):
                     cmd += ["-t", f"{cut_at - seek_to:.6f}"]
                 cmd += ["-c", "copy", str(out_path)]
                 try:
-                    r = subprocess.run(cmd, capture_output=True, timeout=3600)
+                    r = _ff_run(cmd, capture_output=True, timeout=3600)
                     if r.returncode != 0:
                         err_msg = r.stderr.decode(errors="replace")[-300:]
                         ok = False
@@ -1654,7 +1669,7 @@ def split_file(body: SplitRequest):
                         mid_path = str(tmp_dir / "middle.mkv")
                         cmd = [_ffmpeg_exe(), "-y", "-ss", f"{kf_start:.6f}",
                                "-i", str(src), "-t", f"{mid_dur:.6f}", "-c", "copy", mid_path]
-                        r = subprocess.run(cmd, capture_output=True, timeout=3600)
+                        r = _ff_run(cmd, capture_output=True, timeout=3600)
                         if r.returncode != 0:
                             err_msg = r.stderr.decode(errors="replace")[-300:]
                             ok = False
@@ -1703,7 +1718,7 @@ def split_file(body: SplitRequest):
                                     f.write(f"file '{p}'\n")
                             cmd = [_ffmpeg_exe(), "-y", "-f", "concat", "-safe", "0",
                                    "-i", concat_txt, "-c", "copy", str(out_path)]
-                            r = subprocess.run(cmd, capture_output=True, timeout=3600)
+                            r = _ff_run(cmd, capture_output=True, timeout=3600)
                             if r.returncode != 0:
                                 err_msg = r.stderr.decode(errors="replace")[-300:]
                                 ok = False
