@@ -2,6 +2,8 @@
 
 A desktop app for renaming, organising, splitting, and generating subtitles for your TV show and movie library — powered by TMDB metadata and faster-whisper.
 
+**[Website and interactive demo →](https://spinjitsudoom.github.io/my-portfolio/matchbox.html)**
+
 ![Version](https://img.shields.io/badge/version-2.1.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
